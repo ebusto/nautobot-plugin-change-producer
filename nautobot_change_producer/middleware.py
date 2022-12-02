@@ -15,7 +15,7 @@ from .log import log
 # Ignore senders that provide duplicate or sensitive information.
 IGNORE = re.compile(
     "|".join([
-        "django.contrib.admin.models",
+        "django.contrib",
         "nautobot.extras.models.change_logging",
         "nautobot.extras.models.customfields",
         "nautobot.extras.models.datasources",
