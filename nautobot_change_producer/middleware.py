@@ -9,8 +9,6 @@ from django.db.models             import signals
 from django.utils.module_loading  import import_string
 from nautobot.utilities.api       import get_serializer_for_model
 
-from .log import log
-
 
 # Ignore senders that provide duplicate or sensitive information.
 IGNORE = re.compile(
@@ -90,7 +88,7 @@ class Transaction:
                 model["tags"] = list(model["tags"])
 
             return model
-        except Exception as err:
+        except Exception:
             return None
 
     def signal_pre_delete(self, instance, **kwargs):

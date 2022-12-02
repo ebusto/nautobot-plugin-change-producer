@@ -4,7 +4,8 @@ import pynats
 
 class Kafka:
     def __init__(self, acks=1, servers="localhost:9092", topic="nautobot"):
-        self.topic  = topic
+        self.topic = topic
+
         self.client = kafka.KafkaProducer(
             acks              = acks,
             bootstrap_servers = servers,
