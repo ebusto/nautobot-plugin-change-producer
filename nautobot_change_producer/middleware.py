@@ -145,7 +145,11 @@ class Middleware:
                 message = self.message(tx, change)
 
                 if message:
-                    client.send(orjson.dumps({**common, **message}))
+                    client.send(
+                        orjson.dumps({**common, **message},
+                            default = lambda obj: str(obj)
+                        )
+                    )
 
         client.flush()
         client.close()
