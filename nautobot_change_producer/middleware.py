@@ -83,6 +83,11 @@ class Transaction:
             model = fn(record, context={"request": self.request})
             model = model.data
 
+            # TODO: Prevent the serialized model data from ever containing
+            # relationships.
+            if "relationships" in model:
+                model.pop("relationships")
+
             # Prevent dictdiffer from trying to recurse infinitely.
             if "tags" in model:
                 model["tags"] = list(model["tags"])
@@ -206,7 +211,7 @@ class Middleware:
             initial, change.model = change.model, tx.serialize(change.instance)
 
         message = {
-            "class": change.instance.__class__.__name__,
+            "class": change.instance._meta.app_label + "." + change.instance._meta.model_name,
             "event": change.event,
             "model": change.model,
         }
