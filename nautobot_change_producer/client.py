@@ -1,38 +1,41 @@
+import asyncio
 import kafka
-import pynats
+import nats
 
 
 class Kafka:
     def __init__(self, acks=1, servers="localhost:9092", topic="nautobot"):
-        self.topic = topic
+        self.acks    = acks
+        self.servers = servers
+        self.topic   = topic
 
-        self.client = kafka.KafkaProducer(
-            acks              = acks,
-            bootstrap_servers = servers,
+    def send(self, values):
+        client = kafka.KafkaProducer(
+            acks              = self.acks,
+            bootstrap_servers = self.servers,
         )
 
-    def close(self):
-        self.client.close()
+        for value in values:
+            client.send(self.topic, value = value)
 
-    def flush(self):
-        self.client.flush()
-
-    def send(self, message):
-        self.client.send(self.topic, value=message)
+        client.flush()
+        client.close()
 
 
 class NATS:
-    def __init__(self, url="nats://127.0.0.1:4222", subject="nautobot"):
+    def __init__(self, servers=["nats://127.0.0.1:4222"], subject="nautobot", **kwargs):
+        self.servers = servers
         self.subject = subject
+        self.connect = kwargs
 
-        self.client = pynats.NATSClient(url)
-        self.client.connect()
+    def send(self, values):
+        return asyncio.run(self._send(values))
 
-    def close(self):
-        self.client.close()
+    async def _send(self, values):
+        nc = await nats.connect(servers=self.servers, **self.connect)
 
-    def flush(self):
-        pass
+        for value in values:
+            await nc.publish(self.subject, value)
 
-    def send(self, message):
-        self.client.publish(self.subject, payload=message)
+        await nc.flush()
+        await nc.close()

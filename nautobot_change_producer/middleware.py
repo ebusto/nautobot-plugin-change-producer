@@ -143,21 +143,22 @@ class Middleware:
             signal.disconnect(receiver)
 
         common = self.common(request)
-        client = import_string(config["client"])(**config["config"])
+        values = []
 
         for _, change in tx.changes.items():
             if change.complete:
                 message = self.message(tx, change)
 
                 if message:
-                    client.send(
+                    values.append(
                         orjson.dumps({**common, **message},
                             default = lambda obj: str(obj)
                         )
                     )
 
-        client.flush()
-        client.close()
+        if values:
+            client = import_string(config["client"])(**config["config"])
+            client.send(values)
 
         return response
 
