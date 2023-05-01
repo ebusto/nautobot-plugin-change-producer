@@ -25,7 +25,7 @@ PLUGINS_CONFIG["nautobot_change_producer"] = {
 PLUGINS_CONFIG["nautobot_change_producer"] = {
     "client": "nautobot_change_producer.client.NATS",
     "config": {
-        "url": "nats://nats-broker:4222",
+        "servers": "nats://nats-broker:4222",
     }   
 }       
 ```
