@@ -212,9 +212,9 @@ class Middleware:
             initial, change.model = change.model, tx.serialize(change.instance)
 
         message = {
-            "class": change.instance._meta.app_label + "." + change.instance._meta.model_name,
-            "event": change.event,
-            "model": change.model,
+            "event":  change.event,
+            "model":  change.instance._meta.app_label + "." + change.instance._meta.model_name,
+            "record": change.model,
         }
 
         # In order for a consumer to easily retrieve the record from Nautobot,
