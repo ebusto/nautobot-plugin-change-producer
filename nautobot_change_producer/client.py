@@ -1,25 +1,5 @@
 import asyncio
-import kafka
 import nats
-
-
-class Kafka:
-    def __init__(self, acks=1, servers="localhost:9092", topic="nautobot"):
-        self.acks    = acks
-        self.servers = servers
-        self.topic   = topic
-
-    def send(self, values):
-        client = kafka.KafkaProducer(
-            acks              = self.acks,
-            bootstrap_servers = self.servers,
-        )
-
-        for value in values:
-            client.send(self.topic, value = value)
-
-        client.flush()
-        client.close()
 
 
 class NATS:
