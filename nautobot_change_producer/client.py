@@ -9,7 +9,7 @@ class NATS:
         self.connect = kwargs
 
     def send(self, values):
-        return asyncio.run(self._send(values))
+        asyncio.run(self._send(values))
 
     async def _send(self, values):
         nc = await nats.connect(servers=self.servers, **self.connect)
