@@ -4,10 +4,11 @@ import re
 import socket
 import time
 
-from django.conf                  import settings
-from django.db.models             import signals
-from django.utils.module_loading  import import_string
-from nautobot.utilities.api       import get_serializer_for_model
+from django.conf            import settings
+from django.db.models       import signals
+from nautobot.utilities.api import get_serializer_for_model
+
+from .client import NATS
 
 
 # Ignore senders that provide duplicate or sensitive information.
@@ -25,7 +26,12 @@ IGNORE = re.compile(
     ])
 )
 
-config = settings.PLUGINS_CONFIG["nautobot_change_producer"]
+# Build the NATS client.
+config = settings.PLUGINS_CONFIG["nautobot_change_producer"]["config"]
+client = NATS(**config)
+
+# The server hostname is static.
+server = socket.gethostname()
 
 
 # Change describe a per-instance change. The "model" is the serialized instance
@@ -58,14 +64,15 @@ class Transaction:
 
     def ignore(self, instance):
         return IGNORE.match(
-            instance.__class__.__module__ + "." + instance.__class__.__qualname__
+            instance.__class__.__module__ + "." +
+            instance.__class__.__qualname__
         )
 
     def serialize(self, instance, prefix=""):
         if not instance.present_in_database:
             return None
 
-        # Requests performed through the UI don"t have the version attribute,
+        # Requests performed through the UI don't have the version attribute,
         # which the Nautobot custom fields serializer uses to determine the
         # format.
         if not hasattr(self.request, "version"):
@@ -157,7 +164,6 @@ class Middleware:
                     )
 
         if values:
-            client = import_string(config["client"])(**config["config"])
             client.send(values)
 
         return response
@@ -181,7 +187,7 @@ class Middleware:
                 "user": user,
             },
             "response": {
-                "host": socket.gethostname(),
+                "host": server,
             },
         }
 
