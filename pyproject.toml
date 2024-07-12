@@ -4,13 +4,13 @@ description = "Publish changes to a message broker"
 name        = "nautobot-change-producer"
 packages    = [{include = "nautobot_change_producer"}]
 readme      = "README.md"
-version     = "1.2.0"
+version     = "1.3.0"
 
 [tool.poetry.dependencies]
 dictdiffer = "^0.9.0"
-nats-py    = "^2.3.1"
-nkeys      = "^0.1.0"
-orjson     = "^3.9.2"
+nats-py    = "^2.8.0"
+nkeys      = "^0.2.0"
+orjson     = "^3.10.6"
 python     = "^3.10"
 
 [build-system]
