@@ -1,3 +1,4 @@
+import collections
 import dictdiffer
 import orjson
 import re
@@ -35,7 +36,7 @@ server = socket.gethostname()
 
 
 # Change describe a per-instance change. The "model" is the serialized instance
-# prior to any updates. The "instance" is the last (unserialized) instance.
+# prior to any updates. The "instance" is the last unserialized instance.
 class Change:
     def __init__(self, event, model):
         self.event = event
@@ -49,16 +50,23 @@ class Change:
 class Transaction:
     def __init__(self, request):
         self.request = request
-        self.changes = dict()
+        self.changes = collections.defaultdict(list)
 
     def change(self, instance, event):
-        if not self.ignore(instance):
-            self.changes[id(instance)] = Change(event, self.serialize(instance))
+        if self.ignore(instance):
+            return
+
+        self.changes[id(instance)].append(
+            Change(event, self.serialize(instance))
+        )
 
     def commit(self, instance):
-        if not self.ignore(instance):
-            change = self.changes[id(instance)]
+        if self.ignore(instance):
+            return
 
+        changes = self.changes[id(instance)]
+
+        for change in changes:
             change.complete = True
             change.instance = instance
 
@@ -121,8 +129,8 @@ class Transaction:
         self.commit(instance)
 
 
-# Tracking changes is accomplished by observing signals emitted for models
-# created, updated, or deleted during a request.
+# Track changes by observing signals emitted for models created, updated, or
+# deleted during a request.
 class Middleware:
     def __init__(self, get_response):
         self.get_response = get_response
@@ -152,11 +160,14 @@ class Middleware:
         common = self.common(request)
         values = []
 
-        for _, change in tx.changes.items():
-            if change.complete:
-                message = self.message(tx, change)
+        for _, changes in tx.changes.items():
+            for change in changes:
+                if change.complete:
+                    message = self.message(tx, change)
 
-                if message:
+                    if not message:
+                        continue
+
                     values.append(
                         orjson.dumps({**common, **message},
                             default = lambda obj: str(obj)
