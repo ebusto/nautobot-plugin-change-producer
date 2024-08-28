@@ -5,9 +5,9 @@ import re
 import socket
 import time
 
-from django.conf            import settings
-from django.db.models       import signals
-from nautobot.utilities.api import get_serializer_for_model
+from django.conf             import settings
+from django.db.models        import signals
+from nautobot.core.api.utils import get_serializer_for_model
 
 from .client import NATS
 
