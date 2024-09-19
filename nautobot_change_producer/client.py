@@ -3,7 +3,7 @@ import nats
 
 
 class NATS:
-    def __init__(self, servers=["nats://127.0.0.1:4222"], subject="nautobot", **kwargs):
+    def __init__(self, servers=["nats://127.0.0.1:4222"], subject="nautobotv2", **kwargs):
         self.servers = servers
         self.subject = subject
         self.connect = kwargs
