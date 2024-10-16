@@ -140,6 +140,10 @@ class Middleware:
         if request.method == "GET":
             return self.get_response(request)
 
+        if "extras/dynamic-groups" in request.get_full_path():
+            # There are no explicit dynamic_group modals, so we skip them here
+            return self.get_response(request)
+
         tx = Transaction(request)
 
         connections = [
