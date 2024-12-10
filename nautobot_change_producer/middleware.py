@@ -1,4 +1,5 @@
 import collections
+import copy
 import dictdiffer
 import orjson
 import re
@@ -95,7 +96,15 @@ class Transaction:
         try:
             fn = get_serializer_for_model(record, prefix)
 
-            model = fn(record, context={"request": self.request})
+            # The model serializer checks the request method and only allows a
+            # depth greater than zero for GET requests.
+            request = copy.copy(self.request)
+
+            request.method = "GET"
+
+            # Specify the depth to ensure we don't just serialize stub objects,
+            # which aren't as useful to consumers as nested objects.
+            model = fn(record, context={"request": request, "depth": 2})
             model = model.data
 
             # TODO: Prevent the serialized model data from ever containing
@@ -141,7 +150,7 @@ class Middleware:
             return self.get_response(request)
 
         if "extras/dynamic-groups" in request.get_full_path():
-            # There are no explicit dynamic_group modals, so we skip them here
+            # There are no explicit dynamic group models, so we skip them here.
             return self.get_response(request)
 
         tx = Transaction(request)
