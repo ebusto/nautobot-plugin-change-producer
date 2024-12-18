@@ -1,9 +1,11 @@
+import atexit
 import collections
 import copy
 import dictdiffer
 import orjson
 import re
 import socket
+import threading
 import time
 
 from django.conf             import settings
@@ -28,15 +30,16 @@ IGNORE = re.compile(
     ])
 )
 
-# Build the NATS client.
 config = settings.PLUGINS_CONFIG["nautobot_change_producer"]["config"]
-client = NATS(**config)
 
 # The server hostname is static.
 server = socket.gethostname()
 
+# Serialize changes to avoid duplicate messages.
+lock = threading.Lock()
 
-# Change describe a per-instance change. The "model" is the serialized instance
+
+# Change describes a per-instance change. The "model" is the serialized instance
 # prior to any updates. The "instance" is the last unserialized instance.
 class Change:
     def __init__(self, event, model):
@@ -50,8 +53,12 @@ class Change:
 # Transaction stores a request and the changes that occurred.
 class Transaction:
     def __init__(self, request):
-        self.request = request
         self.changes = collections.defaultdict(list)
+
+        # The model serializer checks the request method and only allows a
+        # depth greater than zero for GET requests.
+        self.request = copy.copy(request)
+        self.request.method = "GET"
 
     def change(self, instance, event):
         if self.ignore(instance):
@@ -96,15 +103,9 @@ class Transaction:
         try:
             fn = get_serializer_for_model(record, prefix)
 
-            # The model serializer checks the request method and only allows a
-            # depth greater than zero for GET requests.
-            request = copy.copy(self.request)
-
-            request.method = "GET"
-
             # Specify the depth to ensure we don't just serialize stub objects,
             # which aren't as useful to consumers as nested objects.
-            model = fn(record, context={"request": request, "depth": 2})
+            model = fn(record, context={"request": self.request, "depth": 2})
             model = model.data
 
             # TODO: Prevent the serialized model data from ever containing
@@ -142,7 +143,11 @@ class Transaction:
 # deleted during a request.
 class Middleware:
     def __init__(self, get_response):
+        self.client       = NATS(**config)
         self.get_response = get_response
+
+        # Ensure the client disconnects gracefully.
+        atexit.register(self.client.close)
 
     def __call__(self, request):
         # GET requests will not result in changes.
@@ -155,27 +160,30 @@ class Middleware:
 
         tx = Transaction(request)
 
-        connections = [
-            ( signals.post_delete, tx.signal_post_delete ),
-            ( signals.post_save,   tx.signal_post_save   ),
-            ( signals.pre_delete,  tx.signal_pre_delete  ),
-            ( signals.pre_save,    tx.signal_pre_save    ),
-        ]
+        with lock:
+            connections = [
+                ( signals.post_delete, tx.signal_post_delete ),
+                ( signals.post_save,   tx.signal_post_save   ),
+                ( signals.pre_delete,  tx.signal_pre_delete  ),
+                ( signals.pre_save,    tx.signal_pre_save    ),
+            ]
 
-        for signal, receiver in connections:
-            signal.connect(receiver)
+            for signal, receiver in connections:
+                signal.connect(receiver)
 
-        response = self.get_response(request)
+            response = self.get_response(request)
 
-        for signal, receiver in connections:
-            signal.disconnect(receiver)
+            for signal, receiver in connections:
+                signal.disconnect(receiver)
 
-        common = self.common(request)
-        values = []
+            common = self.common(request)
+            values = []
 
-        for _, changes in tx.changes.items():
-            for change in changes:
-                if change.complete:
+            for _, changes in tx.changes.items():
+                for change in changes:
+                    if not change.complete:
+                        continue
+
                     message = self.message(tx, change)
 
                     if not message:
@@ -188,7 +196,7 @@ class Middleware:
                     )
 
         if values:
-            client.send(values)
+            self.client.send(values)
 
         return response
 

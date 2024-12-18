@@ -1,5 +1,5 @@
-from importlib               import metadata
-from nautobot.extras.plugins import NautobotAppConfig
+from importlib     import metadata
+from nautobot.apps import NautobotAppConfig
 
 
 class NautobotChangeProducerConfig(NautobotAppConfig):
