@@ -3,9 +3,10 @@ import nats
 
 
 class NATS:
-    def __init__(self, servers=["nats://127.0.0.1:4222"], subject="nautobot", **kwargs):
+    def __init__(self, servers=["nats://127.0.0.1:4222"], stream=None, subject="nautobot", **kwargs):
         self.connect = kwargs
         self.servers = servers
+        self.stream  = stream
         self.subject = subject
 
         # Create a client local event loop.
@@ -20,8 +21,11 @@ class NATS:
     def close(self):
         self.loop.run_until_complete(self.async_close())
 
-    def send(self, values):
-        self.loop.run_until_complete(self.async_send(values))
+    def send(self, messages):
+        if self.stream:
+            self.loop.run_until_complete(self.async_send_stream(messages))
+        else:
+            self.loop.run_until_complete(self.async_send_direct(messages))
 
     async def async_connect(self):
         self.client = await nats.connect(servers=self.servers, **self.connect)
@@ -30,9 +34,18 @@ class NATS:
         await self.client.drain()
         await self.client.close()
 
-    async def async_send(self, values):
-        for value in values:
-            await self.client.publish(self.subject, value)
+    async def async_send_direct(self, messages):
+        for message in messages:
+            await self.client.publish(self.subject, message)
 
+        # Ensure all published messages are sent.
         await self.client.flush()
+
+    async def async_send_stream(self, messages):
+        # The stream must already exist.
+        js = self.client.jetstream()
+
+        for message in messages:
+            # JetStream publishing is synchronous, with no need to flush.
+            await js.publish(self.subject, message)
 
