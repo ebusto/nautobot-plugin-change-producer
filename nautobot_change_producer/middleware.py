@@ -7,8 +7,10 @@ import re
 import socket
 import threading
 import time
+import typing
 
 from django.conf             import settings
+from django.db               import transaction
 from django.db.models        import signals
 from nautobot.core.api.utils import get_serializer_for_model
 
@@ -30,63 +32,46 @@ IGNORE = re.compile(
     ])
 )
 
+# Retrieve the configuration.
 config = settings.PLUGINS_CONFIG["nautobot_change_producer"]["config"]
 
-# The server hostname is static.
-server = socket.gethostname()
-
-# Serialize changes to avoid duplicate messages.
+# Client calls and signal handling must be serialized.
 lock = threading.Lock()
 
+# The server hostname is static, and included in each message.
+server = socket.gethostname()
 
-# Change describes a per-instance change. The "model" is the serialized instance
-# prior to any updates. The "instance" is the last unserialized instance.
+
+# Change represents a per-record change. The "record" is the serialized instance
+# prior to any updates. The "instance" is the last unserialized instance,
+# intentionally deferred until the end to avoid unnecessary serialization, as
+# only the first and last records are of interest.
 class Change:
-    def __init__(self, event, model):
-        self.event = event
-        self.model = model
+    def __init__(self, event: str, record: object) -> None:
+        self.event  = event
+        self.record = record
 
         self.complete = None
         self.instance = None
 
 
-# Transaction stores a request and the changes that occurred.
+# Transaction stores a request and the changes that occurred while processing
+# that request.
 class Transaction:
-    def __init__(self, request):
+    def __init__(self, request: object) -> None:
         self.changes = collections.defaultdict(list)
 
-        # The model serializer checks the request method and only allows a
-        # depth greater than zero for GET requests.
+        # Model serializers check the request method and only allow a depth
+        # greater than zero for GET requests.
         self.request = copy.copy(request)
         self.request.method = "GET"
 
-    def change(self, instance, event):
-        if self.ignore(instance):
-            return
-
-        self.changes[id(instance)].append(
-            Change(event, self.serialize(instance))
-        )
-
-    def commit(self, instance):
-        if self.ignore(instance):
-            return
-
-        changes = self.changes[id(instance)]
-
-        for change in changes:
-            change.complete = True
-            change.instance = instance
-
-    def ignore(self, instance):
-        return IGNORE.match(
-            instance.__class__.__module__ + "." +
-            instance.__class__.__qualname__
-        )
-
-    def serialize(self, instance, prefix=""):
-        if not instance.present_in_database:
-            return None
+        # Define the serialization context, with a sufficient depth to ensure we
+        # don't just serialize stub objects, which aren't as useful to consumers
+        # as nested objects.
+        self.context = {
+            "depth": 2, "request": self.request,
+        }
 
         # Requests performed through the UI don't have the version attribute,
         # which the Nautobot custom fields serializer uses to determine the
@@ -94,68 +79,83 @@ class Transaction:
         if not hasattr(self.request, "version"):
             setattr(self.request, "version", settings.REST_FRAMEWORK["DEFAULT_VERSION"])
 
-        try:
-            sender = instance.__class__
-            record = sender.objects.get(pk=instance.pk)
-        except Exception:
-            record = instance
+    # Log a change for the specified object.
+    def change(self, instance: object, event: str) -> None:
+        if self.ignore(instance):
+            return
+
+        self.changes[instance.pk].append(
+            Change(event, self.serialize(instance))
+        )
+
+    # Mark all changes as complete for the specified object.
+    def commit(self, instance: object) -> None:
+        if self.ignore(instance):
+            return
+
+        changes = self.changes[instance.pk]
+
+        for change in changes:
+            change.complete = True
+            change.instance = instance
+
+    # Determine whether or not this object should be ignored.
+    def ignore(self, instance: object) -> bool:
+        return IGNORE.match(
+            instance.__class__.__module__ + "." +
+            instance.__class__.__qualname__
+        )
+
+    # Return the dictionary representation of the object.
+    def serialize(self, instance: object) -> dict:
+        if not instance.present_in_database:
+            return None
 
         try:
-            fn = get_serializer_for_model(record, prefix)
+            fn = get_serializer_for_model(instance)
 
-            # Specify the depth to ensure we don't just serialize stub objects,
-            # which aren't as useful to consumers as nested objects.
-            model = fn(record, context={"request": self.request, "depth": 2})
-            model = model.data
+            record = fn(instance, context=self.context)
 
-            # TODO: Prevent the serialized model data from ever containing
-            # relationships.
-            if "relationships" in model:
-                model.pop("relationships")
+            return record.data
 
-            # Prevent dictdiffer from trying to recurse infinitely.
-            if "tags" in model:
-                model["tags"] = list(model["tags"])
-
-            return model
         except Exception:
             return None
 
-    def signal_pre_delete(self, instance, **kwargs):
+    def signal_pre_delete(self, instance: object, **kwargs) -> None:
         self.change(instance, "delete")
 
-    def signal_pre_save(self, instance, **kwargs):
+    def signal_pre_save(self, instance: object, **kwargs) -> None:
         action = "create"
 
         if hasattr(instance, "present_in_database") and instance.present_in_database:
             action = "update"
 
+            # Retrieve the current record from the database, in order to
+            # generate the differences between the previous and updated records.
+            instance = instance.__class__.objects.get(pk=instance.pk)
+
         self.change(instance, action)
 
-    def signal_post_delete(self, instance, **kwargs):
+    def signal_post_delete(self, instance: object, **kwargs) -> None:
         self.commit(instance)
 
-    def signal_post_save(self, instance, **kwargs):
+    def signal_post_save(self, instance: object, **kwargs) -> None:
         self.commit(instance)
 
 
-# Track changes by observing signals emitted for models created, updated, or
-# deleted during a request.
+# Middleware tracks changes by observing signals emitted for models created,
+# updated, or deleted during a request.
 class Middleware:
-    def __init__(self, get_response):
-        self.client       = NATS(**config)
+    def __init__(self, get_response: typing.Callable) -> None:
+        self.client       = None
         self.get_response = get_response
 
-        # Ensure the client disconnects gracefully.
-        atexit.register(self.client.close)
+        atexit.register(self.close)
 
-    def __call__(self, request):
+    @transaction.atomic
+    def __call__(self, request: object) -> object:
         # GET requests will not result in changes.
         if request.method == "GET":
-            return self.get_response(request)
-
-        if "extras/dynamic-groups" in request.get_full_path():
-            # There are no explicit dynamic group models, so we skip them here.
             return self.get_response(request)
 
         tx = Transaction(request)
@@ -177,10 +177,10 @@ class Middleware:
                 signal.disconnect(receiver)
 
             common = self.common(request)
-            values = []
 
             for _, changes in tx.changes.items():
                 for change in changes:
+                    # Discard partial changes lacking a "post" signal.
                     if not change.complete:
                         continue
 
@@ -189,19 +189,23 @@ class Middleware:
                     if not message:
                         continue
 
-                    values.append(
+                    self.publish(
                         orjson.dumps({**common, **message},
                             default = lambda obj: str(obj)
                         )
                     )
 
-        if values:
-            self.client.send(values)
-
         return response
 
+    # Close ensures the client disconnects gracefully.
+    def close(self):
+        with lock:
+            if self.client:
+                self.client.close()
+                self.client = None
+
     # Common metadata from the request, to be included with each message.
-    def common(self, request):
+    def common(self, request: object) -> dict:
         addr = request.META["REMOTE_ADDR"]
         user = request.user.get_username()
 
@@ -223,8 +227,8 @@ class Middleware:
             },
         }
 
-    # Returns the difference between two models.
-    def diff(self, a, b):
+    # Return the difference between two models represented as dictionaries.
+    def diff(self, a: dict, b: dict) -> dict:
         detail = {}
 
         for diff in dictdiffer.diff(a, b, expand=True):
@@ -234,6 +238,9 @@ class Middleware:
             if isinstance(field, list):
                 field = field[0]
 
+            if not field:
+                continue
+
             detail[field] = [
                 dictdiffer.dot_lookup(a, field),
                 dictdiffer.dot_lookup(b, field),
@@ -241,30 +248,27 @@ class Middleware:
 
         return detail
 
-    # Returns the message to be published for the change.
-    def message(self, tx, change):
+    # Return the message to be published for the change.
+    def message(self, tx: Transaction, change: Change) -> dict:
         # Track the initial model for diffing.
         initial = None
 
         if change.event != "delete":
-            initial, change.model = change.model, tx.serialize(change.instance)
+            initial, change.record = change.record, tx.serialize(change.instance)
 
         message = {
             "event":  change.event,
-            "model":  change.instance._meta.app_label + "." + change.instance._meta.model_name,
-            "record": change.model,
+            "model":  change.record["object_type"],
+            "record": change.record,
         }
 
         # In order for a consumer to easily retrieve the record from Nautobot,
         # include the absolute URL.
-        if change.event != "delete":
-            nested = tx.serialize(change.instance, "Nested")
-
-            if nested and "url" in nested:
-                message["@url"] = nested["url"]
+        if "url" in change.record:
+            message["@url"] = change.record["url"]
 
         if change.event == "update":
-            detail = self.diff(initial, change.model)
+            detail = self.diff(initial, change.record)
 
             if not detail:
                 return None
@@ -272,3 +276,33 @@ class Middleware:
             message["detail"] = detail
 
         return message
+
+    # Attempt to publish the message, retrying if necessary with an increasing
+    # delay between attempts. Called with the lock held.
+    def publish(self, message: bytes) -> None:
+        attempts = 10
+
+        for n in range(attempts):
+            try:
+                # Create a client if necessary.
+                if not self.client:
+                    self.client = NATS(**config)
+
+                self.client.publish(message)
+
+            except Exception as e:
+                # Attempt to gracefully disconnect, and then clear the client to
+                # ensure the next attempt reconnects.
+                self.client.close()
+                self.client = None
+
+                # Last attempt? Propagate the exception to the caller.
+                if n+1 == attempts:
+                    raise e
+
+                # Trying again? Sleep for a bit.
+                time.sleep(n)
+
+            else:
+                # Success!
+                return
