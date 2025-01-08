@@ -154,8 +154,8 @@ class Middleware:
 
     @transaction.atomic
     def __call__(self, request: object) -> object:
-        # GET requests will not result in changes.
-        if request.method == "GET":
+        # GET and GraphQL requests will not result in changes.
+        if request.method == "GET" or "/graphql" in request.get_full_path():
             return self.get_response(request)
 
         tx = Transaction(request)
