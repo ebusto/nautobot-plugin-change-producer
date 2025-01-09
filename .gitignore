@@ -3,3 +3,4 @@ dist
 poetry.lock
 .idea
 develop/.env
+.coverage*
