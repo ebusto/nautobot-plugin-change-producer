@@ -9,7 +9,9 @@ VERSION = $(shell grep -m 1 version pyproject.toml | tr -s ' ' | tr -d '"' | tr 
 
 default: help
 
-
+# -------------------------------------------------------------------------------------------
+# DEVELOPMENT ENVIRONMENT: Commands used to interface with the development environment.
+# -------------------------------------------------------------------------------------------
 cli: .env ## Launch a bash shell inside the running Nautobot container.
 ifeq (,$(findstring nautobot,$($COMPOSE ps --services --filter status=running)))
 	@make start
@@ -51,6 +53,21 @@ ifeq (,$(findstring nautobot,$($COMPOSE ps --services --filter status=running)))
 endif
 	@$(COMPOSE) exec nautobot nautobot-server shell_plus
 .PHONY: shell
+
+# -------------------------------------------------------------------------------------------
+# LINT/TEST: Linting, integrations and unit tests.
+# -------------------------------------------------------------------------------------------
+unittest: .env ## Runs unit tests in the dev container.
+	@$(COMPOSE) run --rm --entrypoint 'make _unittest' nautobot
+.PHONY: unittest
+
+_unittest:
+	@echo "🧪 Running Python Unittest... 🧪"
+	@poetry run coverage run --rcfile=pyproject.toml --module nautobot.core.cli test nautobot_change_producer --buffer
+	@poetry run coverage combine || true
+	@poetry run coverage report --rcfile=pyproject.toml --fail-under=50
+	@poetry run coverage html --rcfile=pyproject.toml
+.PHONY: _unittest
 
 # -------------------------------------------------------------------------------------------
 # BUILD: Build Python package.
