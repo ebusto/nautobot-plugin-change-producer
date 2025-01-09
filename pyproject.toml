@@ -4,7 +4,7 @@ description = "Publish changes to a message broker"
 name        = "nautobot-change-producer"
 packages    = [{include = "nautobot_change_producer"}]
 readme      = "README.md"
-version     = "2.1.1"
+version     = "2.1.2"
 
 [tool.poetry.dependencies]
 dictdiffer = "^0.9.0"

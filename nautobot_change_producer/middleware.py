@@ -256,6 +256,17 @@ class Middleware:
         if change.event != "delete":
             initial, change.record = change.record, tx.serialize(change.instance)
 
+        # When attemptig to delete a interface with an attached cable, the message will send an update action
+        # with a NoneType record, because the cable has been deleted via CASCADE on the interface model.
+        if not change.record:
+            return None
+
+        # The object_type value is stored as origin_type or destination_type on the CablePath addition
+        # to the connecting models. Since the change event is not related to crud actions on a model, I've
+        # excluded it for now as the terminations are sent via a dcim.interface:update event.
+        if not change.record.get("object_type"):
+            return None
+
         message = {
             "event":  change.event,
             "model":  change.record["object_type"],
