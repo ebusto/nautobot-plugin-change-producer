@@ -256,6 +256,11 @@ class Middleware:
         if change.event != "delete":
             initial, change.record = change.record, tx.serialize(change.instance)
 
+        # Ignore objects that don't serialize, or lack an "object_type" field,
+        # such as CablePath.
+        if not change.record or "object_type" not in change.record:
+            return None
+
         message = {
             "event":  change.event,
             "model":  change.record["object_type"],
