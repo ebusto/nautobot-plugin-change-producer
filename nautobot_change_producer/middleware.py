@@ -1,4 +1,3 @@
-import atexit
 import collections
 import copy
 import dictdiffer
@@ -32,8 +31,8 @@ IGNORE = re.compile(
     ])
 )
 
-# Retrieve the configuration.
-config = settings.PLUGINS_CONFIG["nautobot_change_producer"]["config"]
+# Create the NATS client.
+client = NATS(**settings.PLUGINS_CONFIG["nautobot_change_producer"]["config"])
 
 # Client calls and signal handling must be serialized.
 lock = threading.Lock()
@@ -55,9 +54,9 @@ class Change:
         self.instance = None
 
 
-# Transaction stores a request and the changes that occurred while processing
+# ChangeSet stores a request and the changes that occurred while processing
 # that request.
-class Transaction:
+class ChangeSet:
     def __init__(self, request: object) -> None:
         self.changes = collections.defaultdict(list)
 
@@ -147,10 +146,7 @@ class Transaction:
 # updated, or deleted during a request.
 class Middleware:
     def __init__(self, get_response: typing.Callable) -> None:
-        self.client       = None
         self.get_response = get_response
-
-        atexit.register(self.close)
 
     @transaction.atomic
     def __call__(self, request: object) -> object:
@@ -158,14 +154,14 @@ class Middleware:
         if request.method == "GET" or "/graphql" in request.get_full_path():
             return self.get_response(request)
 
-        tx = Transaction(request)
+        cs = ChangeSet(request)
 
         with lock:
             connections = [
-                ( signals.post_delete, tx.signal_post_delete ),
-                ( signals.post_save,   tx.signal_post_save   ),
-                ( signals.pre_delete,  tx.signal_pre_delete  ),
-                ( signals.pre_save,    tx.signal_pre_save    ),
+                ( signals.post_delete, cs.signal_post_delete ),
+                ( signals.post_save,   cs.signal_post_save   ),
+                ( signals.pre_delete,  cs.signal_pre_delete  ),
+                ( signals.pre_save,    cs.signal_pre_save    ),
             ]
 
             for signal, receiver in connections:
@@ -178,31 +174,24 @@ class Middleware:
 
             common = self.common(request)
 
-            for _, changes in tx.changes.items():
+            for _, changes in cs.changes.items():
                 for change in changes:
                     # Discard partial changes lacking a "post" signal.
                     if not change.complete:
                         continue
 
-                    message = self.message(tx, change)
+                    message = self.message(cs, change)
 
                     if not message:
                         continue
 
-                    self.publish(
+                    client.publish(
                         orjson.dumps({**common, **message},
                             default = lambda obj: str(obj)
                         )
                     )
 
         return response
-
-    # Close ensures the client disconnects gracefully.
-    def close(self):
-        with lock:
-            if self.client:
-                self.client.close()
-                self.client = None
 
     # Common metadata from the request, to be included with each message.
     def common(self, request: object) -> dict:
@@ -249,12 +238,12 @@ class Middleware:
         return detail
 
     # Return the message to be published for the change.
-    def message(self, tx: Transaction, change: Change) -> dict:
+    def message(self, cs: ChangeSet, change: Change) -> dict:
         # Track the initial model for diffing.
         initial = None
 
         if change.event != "delete":
-            initial, change.record = change.record, tx.serialize(change.instance)
+            initial, change.record = change.record, cs.serialize(change.instance)
 
         # Ignore objects that don't serialize, or lack an "object_type" field,
         # such as CablePath.
@@ -281,33 +270,3 @@ class Middleware:
             message["detail"] = detail
 
         return message
-
-    # Attempt to publish the message, retrying if necessary with an increasing
-    # delay between attempts. Called with the lock held.
-    def publish(self, message: bytes) -> None:
-        attempts = 10
-
-        for n in range(attempts):
-            try:
-                # Create a client if necessary.
-                if not self.client:
-                    self.client = NATS(**config)
-
-                self.client.publish(message)
-
-            except Exception as e:
-                # Attempt to gracefully disconnect, and then clear the client to
-                # ensure the next attempt reconnects.
-                self.client.close()
-                self.client = None
-
-                # Last attempt? Propagate the exception to the caller.
-                if n+1 == attempts:
-                    raise e
-
-                # Trying again? Sleep for a bit.
-                time.sleep(n)
-
-            else:
-                # Success!
-                return

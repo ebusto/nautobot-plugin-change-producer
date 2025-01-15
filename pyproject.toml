@@ -1,16 +1,16 @@
 [tool.poetry]
 authors     = ["Eric Busto <ebusto@nvidia.com>"]
-description = "Publish changes to a message broker"
+description = "Publish changes to NATS"
 name        = "nautobot-change-producer"
 packages    = [{include = "nautobot_change_producer"}]
 readme      = "README.md"
-version     = "2.1.3"
+version     = "2.1.4"
 
 [tool.poetry.dependencies]
 dictdiffer = "^0.9.0"
 nats-py    = "^2.9.0"
 nkeys      = "^0.2.1"
-orjson     = "^3.10.12"
+orjson     = "^3.10.14"
 python     = "^3.10"
 
 [build-system]
