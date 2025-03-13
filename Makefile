@@ -19,6 +19,9 @@ endif
 	@$(COMPOSE) exec nautobot bash
 .PHONY: cli
 
+sub:  ## Runs a small subscriber to test the change producer.
+	@python3 develop/subscriber.py
+
 debug: .env ## Start Nautobot and its dependencies with this plugin in debug mode.
 	@$(COMPOSE) up
 .PHONY: debug
